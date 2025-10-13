@@ -97,6 +97,8 @@ Puedes desplegar la app en Streamlit Cloud y conectarla a tu repositorio (públi
 
 Accede a la app desde cualquier dispositivo (móvil, PC, tablet) usando el enlace proporcionado por Streamlit Cloud.
 
+⚠️ Nota de privacidad: Aunque el repositorio original de esta aplicación pueda ser privado, al desplegarse en Streamlit Cloud como app, el código y los datos se copian a los servidores de Streamlit. Por ello, si la aplicación se configura como “public and searchable”, cualquier persona con el enlace podrá acceder y ejecutar la aplicación sin necesidad de autenticación. Para restringir el acceso, debe seleccionarse la opción “Only specific people can view this app” desde los ajustes de Sharing en Streamlit.
+
 ## Ejemplo de personalización
 
 Si quieres crear un asistente para otro ámbito (idiomas, productividad, psicología...):
