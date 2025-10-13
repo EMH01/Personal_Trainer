@@ -1,0 +1,5 @@
+fecha,tipo,descripcion,valor_antes,valor_despues
+2025-10-01,plan_semanal,Desayuno cambiado,"Café solo","Café con leche y tostada"
+2025-10-02,mediciones,Actualización de peso,65,64.5
+2025-10-03,plan_semanal,Comida modificada,"Ensalada de tomate","Ensalada de tomate y pollo"
+# Copia este archivo como historial_cambios.csv para registrar tus cambios

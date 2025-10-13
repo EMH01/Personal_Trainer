@@ -1,0 +1,9 @@
+python-dotenv
+streamlit
+openai
+pyyaml
+pandas
+requests
+azure-identity
+streamlit-audiorec
+openai-whisper

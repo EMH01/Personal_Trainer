@@ -1,0 +1,10 @@
+# Archivos personales y secretos
+/.venv
+/bibliografia_dietas
+/__pycache__/
+.env
+config_usuario.yaml
+mediciones.csv
+plan_semanal.csv
+historial_chat.json
+historial_cambios.csv

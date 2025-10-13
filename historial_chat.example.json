@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "content": "Hola, ¿puedes sugerirme un menú saludable para la semana?"
+  },
+  {
+    "role": "assistant",
+    "content": "¡Por supuesto! Aquí tienes un menú semanal equilibrado."
+  },
+  {
+    "role": "user",
+    "content": "¿Cómo puedo registrar mis mediciones diarias?"
+  },
+  {
+    "role": "assistant",
+    "content": "Puedes añadir tus datos en el archivo mediciones.csv para llevar el control."
+  }
+]
