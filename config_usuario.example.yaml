@@ -2,23 +2,30 @@ nombre: "Ana López"
 edad: 30
 ciudad: "Madrid"
 pais: "España"
-peso: 65
-estatura: 1.68
 profesion: "Ingeniera"
+
 preferencias:
-  - Postre favorito: chocolate negro
-  - Bebida preferida: té verde
-  - No le gusta: yogur natural
+  - "Prefiere desayunos sencillos"
+  - "Le gusta cocinar el fin de semana"
+
+objetivos:
+  - "Mantener una rutina semanal consistente"
+  - "Planificar comidas variadas"
+
 rutina:
   - "Gimnasio lunes y miércoles a las 19:00"
-  - "Paseo diario con el perro a las 8:00"
-  - "Yoga los sábados por la mañana"
+  - "Paseo diario por la mañana"
+
 horario_trabajo: "09:00-17:00"
+
+materiales_casa:
+  - "Esterilla"
+  - "Bandas elásticas"
+
 refrigerador:
-  - Leche desnatada
-  - Huevos
-  - Pollo
-  - Espinacas
-  - Queso fresco
-  - Tomates
-# Copia este archivo como config_usuario.yaml y personalízalo con tus datos
+  - "Huevos"
+  - "Pollo"
+  - "Espinacas"
+  - "Tomates"
+
+# Copy this file to config_usuario.yaml and customize it locally.

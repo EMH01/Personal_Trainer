@@ -1,117 +1,159 @@
-# Asistente Virtual Personal 🏋️‍♀️🥗💪
+# Personal Wellness AI Assistant
 
-Este proyecto es una **aplicación web en Streamlit** que funciona como asistente virtual personal, orientado a salud, fitness, nutrición y gestión de rutinas semanales. Permite visualizar, editar y guardar datos personales, rutinas y conversaciones, todo desde una interfaz web adaptable a cualquier dispositivo (móvil, PC, tablet).
+A **local-first Streamlit application** for planning weekly routines, meals, personal measurements, and wellness-oriented conversations with an Azure OpenAI assistant.
 
-Puedes desplegar la app en Streamlit Cloud y acceder a ella desde cualquier lugar mediante un enlace. Si el repositorio es privado, tus archivos personales estarán protegidos y solo tú podrás acceder tras autenticarte en GitHub/Streamlit.
+The project is designed as an applied AI portfolio example: user data stays in local files, Azure services are optional/configurable, and the public repository contains only synthetic examples.
 
----
+> This application supports everyday wellness planning. It is not a medical, nutritional, or sports diagnosis tool and does not replace qualified professional advice.
 
-## Características principales
+## What it demonstrates
 
-- **Chat inteligente**: Conversa con tu asistente, guarda el historial en `historial_chat.json` y visualízalo tipo WhatsApp/Telegram.
-- **Plan semanal**: Edita y visualiza rutinas y comidas en `plan_semanal.csv`, mostrado en tablas y tarjetas interactivas.
-- **Histórico de mediciones**: Guarda y consulta tus datos en `mediciones.csv`, con cálculos automáticos de IMC y evolución semanal.
-- **Gestión de documentos**: Accede a tu biblioteca personal (PDFs, imágenes) en la carpeta `bibliografia_dietas/` (no incluida en el repo público).
-- **Exportación y edición**: Exporta tu plan semanal y mediciones a CSV con un clic.
-- **Personalización total**: Cambia emojis, colores, textos y funcionalidades fácilmente.
+- conversational AI with **Azure OpenAI**
+- optional PDF extraction with **Azure Document Intelligence**
+- local-first personal state stored in CSV / JSON / YAML
+- editable weekly meal and activity plans
+- measurement tracking and lightweight progress visualization
+- private configuration separated from source control
+- testable assistant logic with injectable external clients
+- Streamlit UI
+- automated tests and GitHub Actions CI
 
----
+## Architecture
 
-## Cómo instalar y ejecutar
+```mermaid
+flowchart LR
+    U[User] --> UI[Streamlit UI]
+    UI --> A[Wellness Assistant]
+    A --> O[Azure OpenAI]
+    A --> P[Local profile + plan + measurements]
+    A --> D[Optional Document Intelligence]
+    D --> B[Local bibliography PDFs]
+    P --> UI
+```
 
-1. **Clona el repositorio**  
-   ```bash
-   git clone https://github.com/tu_usuario/tu_repo.git
-   cd tu_repo
-   ```
+The core application is intentionally local-first. Personal configuration and measurements are excluded from Git and are never required for the public demo configuration.
 
-2. **Crea y activa un entorno virtual** (recomendado)
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # En Linux/Mac
-   .venv\Scripts\activate     # En Windows
-   ```
+## Project structure
 
-3. **Instala las dependencias**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```text
+.
+├── app.py
+├── assistant.py
+├── config_usuario.example.yaml
+├── mediciones.example.csv
+├── plan_semanal.example.csv
+├── historial_chat.example.json
+├── historial_cambios.example.csv
+├── .env.example
+├── pyproject.toml
+└── tests/
+```
 
-4. **Ejecuta la aplicación**
-   ```bash
-   streamlit run app.py
-   ```
+## Setup
 
----
+Requires Python 3.11+.
 
-## Personalización
+```bash
+python -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+# .venv\Scripts\activate       # Windows
 
-Para adaptar el asistente a tus necesidades:
+pip install -e ".[dev]"
+cp .env.example .env
+cp config_usuario.example.yaml config_usuario.yaml
+```
 
-- **Emojis, títulos y textos**: Edita las líneas iniciales de `app.py` (por ejemplo, `st.title`).
-- **Lógica de asistente**: El archivo `assistant.py` gestiona la interacción con el modelo o la base de datos. Modifícalo para cambiar el comportamiento.
-- **Plan semanal**: Añade o quita columnas, cambia los días, personaliza la visualización mejorada con tarjetas y emojis.
-- **Mediciones**: Añade más métricas, modifica el cálculo del IMC, cambia la visualización.
-- **Chat y visualización de mensajes**: Aprovecha `st.chat_message` para una experiencia tipo WhatsApp/Telegram.
-- **Exportación y edición**: Puedes añadir exportación a PDF, edición de otros datos, integración con otras APIs, etc.
+Configure the Azure OpenAI variables in `.env` and run:
 
----
+```bash
+streamlit run app.py
+```
 
-## Estructura de archivos principales
+If `config_usuario.yaml` is missing, the application falls back to the synthetic example configuration so the public project can still start in demo mode.
 
-- `app.py`: Aplicación principal Streamlit. Organiza la interfaz, pestañas y lógica de visualización.
-- `assistant.py`: Lógica del asistente virtual. Gestiona respuestas, interacción y procesamiento de mensajes.
-- `config_usuario.yaml`: Configuración personalizada del usuario (no incluida en el repo público).
-- `historial_chat.json`: Guarda el historial completo de conversaciones.
-- `historial_cambios.csv`: Registro de cambios realizados en rutinas y datos.
-- `ideas_msjs.txt`: Notas rápidas y mensajes frecuentes para el asistente.
-- `mediciones.csv`: Datos de mediciones corporales, IMC y evolución.
-- `plan_semanal.csv`: Rutinas y comidas semanales, editable desde la app.
-- `requirements.txt`: Lista de dependencias necesarias para ejecutar la app.
-- `bibliografia_dietas/`: Carpeta para documentos personales, PDFs y recursos (no incluida en el repo público).
+## Private local data
 
----
+The following files are intentionally ignored by Git:
 
-## Dependencias recomendadas
+- `.env`
+- `config_usuario.yaml`
+- `mediciones.csv`
+- `plan_semanal.csv`
+- `historial_chat.json`
+- `historial_cambios.csv`
+- `bibliografia_dietas/`
 
-Incluye, como mínimo:
-- `streamlit >= 1.25`
-- `pandas`
-- (Agrega las que uses en assistant.py: por ejemplo, OpenAI, scikit-learn, etc.)
+The repository includes only example files with synthetic values.
 
----
+## Azure OpenAI
 
-## Visualización en el front
+The assistant uses an explicit `AzureOpenAI` client rather than global SDK configuration.
 
-- El chat se muestra en formato conversación, con mensajes diferenciados para usuario y asistente.
-- El plan semanal y las mediciones se visualizan en tablas interactivas y tarjetas con emojis.
-- Los documentos personales pueden listarse y abrirse desde la interfaz (solo si están presentes y permitidos).
-- Los cambios y el historial se muestran en pestañas separadas para fácil consulta.
+Required variables:
 
-## Despliegue y acceso
+```dotenv
+AZURE_OPENAI_ENDPOINT=...
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_DEPLOYMENT_NAME=...
+AZURE_OPENAI_VERSION=...
+```
 
-Puedes desplegar la app en Streamlit Cloud y conectarla a tu repositorio (público o privado):
+External clients are injectable, which allows the core behavior to be unit-tested without making API calls.
 
-- **Repo privado**: Sube tus archivos personales y accede a la app tras autenticarte en GitHub/Streamlit. Tus datos estarán protegidos.
-- **Repo público**: Sube solo el código y ejemplos, excluyendo archivos personales y la carpeta de bibliografía mediante `.gitignore`.
+## Optional document context
 
-Accede a la app desde cualquier dispositivo (móvil, PC, tablet) usando el enlace proporcionado por Streamlit Cloud.
+A local `bibliografia_dietas/` directory can contain text, image, or PDF resources.
 
-⚠️ Nota de privacidad: Aunque el repositorio original de esta aplicación pueda ser privado, al desplegarse en Streamlit Cloud como app, el código y los datos se copian a los servidores de Streamlit. Por ello, si la aplicación se configura como “public and searchable”, cualquier persona con el enlace podrá acceder y ejecutar la aplicación sin necesidad de autenticación. Para restringir el acceso, debe seleccionarse la opción “Only specific people can view this app” desde los ajustes de Sharing en Streamlit.
+For PDF text extraction, configure Azure Document Intelligence:
 
-## Ejemplo de personalización
+```dotenv
+AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=...
+AZURE_DOCUMENT_INTELLIGENCE_KEY=...
+AZURE_DOCUMENT_INTELLIGENCE_API_VERSION=2024-11-30
+```
 
-Si quieres crear un asistente para otro ámbito (idiomas, productividad, psicología...):
-1. Cambia los textos, emojis y títulos en `app.py`.
-2. Modifica las pestañas y los campos del plan semanal y mediciones.
-3. Adapta la lógica de `assistant.py` para responder acorde al nuevo tema.
-4. Personaliza la visualización con tus propios iconos y colores.
+PDF analysis is treated as an asynchronous operation and polls the returned operation URL until completion.
 
----
+## Measurements
 
-## Créditos y soporte
+The maintained schema supports:
 
-Desarrollado por Esther Martin para uso personal.
+```text
+fecha, cintura, cadera, muslo, peso, altura
+```
 
----
+The modernization fixes two inconsistencies in the earlier implementation:
 
+- the UI supplied weight and height but the storage method did not accept them
+- measurement loading removed weight and height before the UI could calculate BMI
+
+The public example data is synthetic.
+
+## Quality checks
+
+```bash
+ruff check assistant.py tests
+pytest -q
+```
+
+Tests cover:
+
+- fallback to the public example configuration
+- measurement persistence including weight and height
+- editing previously saved measurements
+- injected/mock Azure OpenAI calls
+- safety instructions passed to the model
+
+No Azure request is made in CI.
+
+## Current scope
+
+This is an applied AI assistant and personal productivity/wellness project, not a clinically validated system.
+
+Useful next additions would be:
+
+- structured model output instead of extracting menu JSON from free text
+- explicit schema validation for imported local files
+- a screenshot/demo using synthetic data
+- optional encrypted local persistence
+- a small end-to-end Streamlit smoke test

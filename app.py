@@ -1,14 +1,25 @@
-import streamlit as st
-import pandas as pd
 import datetime
 import json
+
+import pandas as pd
+import streamlit as st
+
 from assistant import VirtualAssistant
 
 assistant = VirtualAssistant()
 usuario_nombre = assistant.usuario["nombre"]
 
-st.set_page_config(page_title=f"Asistente {usuario_nombre}", layout="wide")
-st.title(f"🤖🏋️‍♀️Asistente Virtual Personal: {usuario_nombre} 🥗💪")
+st.set_page_config(page_title="Personal Wellness AI Assistant", layout="wide")
+st.title(f"🤖 Personal Wellness AI Assistant · {usuario_nombre}")
+st.caption(
+    "Planificación personal de hábitos, actividad y comidas. "
+    "No sustituye consejo médico, nutricional ni deportivo profesional."
+)
+if assistant.using_example_config:
+    st.info(
+        "Demo mode: using config_usuario.example.yaml. "
+        "Copy it to config_usuario.yaml to use your own local profile."
+    )
 
 CHAT_FILE = "historial_chat.json"
 
@@ -211,12 +222,14 @@ with tab2:
     if st.button("Guardar medición"):
         if measurements is not None and not measurements.empty and fecha_med in pd.to_datetime(measurements["fecha"]).dt.date.values:
             st.warning("Ya existe una medición para esa fecha. Se sobrescribirá el registro.")
-            idx = measurements.index[pd.to_datetime(measurements["fecha"]).dt.date == fecha_med]
-            measurements.at[idx, "cintura"] = cintura
-            measurements.at[idx, "cadera"] = cadera
-            measurements.at[idx, "muslo"] = muslo
-            measurements.at[idx, "peso"] = peso
-            measurements.at[idx, "altura"] = altura
+            idx = measurements.index[
+                pd.to_datetime(measurements["fecha"]).dt.date == fecha_med
+            ]
+            measurements.loc[idx, "cintura"] = cintura
+            measurements.loc[idx, "cadera"] = cadera
+            measurements.loc[idx, "muslo"] = muslo
+            measurements.loc[idx, "peso"] = peso
+            measurements.loc[idx, "altura"] = altura
             assistant.save_measurements(measurements)
         else:
             assistant.register_measurements(fecha_med, cintura, cadera, muslo, peso, altura)
