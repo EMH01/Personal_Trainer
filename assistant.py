@@ -1,265 +1,438 @@
+from __future__ import annotations
+
+import datetime as dt
 import os
-import openai
-import datetime
+import time
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
 import requests
 import yaml
 from dotenv import load_dotenv
+from openai import AzureOpenAI
 
 load_dotenv()
 
+
 class VirtualAssistant:
-    def __init__(self):
+    """Local-first wellness planning assistant with optional Azure AI services."""
+
+    def __init__(
+        self,
+        *,
+        base_dir: str | Path = ".",
+        openai_client: AzureOpenAI | None = None,
+        http_session: requests.Session | None = None,
+    ) -> None:
+        self.base_dir = Path(base_dir)
+        self.docs_folder = self.base_dir / "bibliografia_dietas"
+        self.measurements_file = self.base_dir / "mediciones.csv"
+        self.plan_file = self.base_dir / "plan_semanal.csv"
+        self.hist_file = self.base_dir / "historial_cambios.csv"
+
         self.openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         self.openai_key = os.getenv("AZURE_OPENAI_API_KEY")
         self.deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
         self.api_version = os.getenv("AZURE_OPENAI_VERSION")
+
         self.docintel_endpoint = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
         self.docintel_key = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY")
-        self.docs_folder = "bibliografia_dietas"
-        self.evolution_file = "evolucion.csv"
-        self.measurements_file = "mediciones.csv"
-        self.plan_file = "plan_semanal.csv"
-        self.hist_file = "historial_cambios.csv"
+        self.docintel_api_version = os.getenv(
+            "AZURE_DOCUMENT_INTELLIGENCE_API_VERSION",
+            "2024-11-30",
+        )
 
-        with open("config_usuario.yaml", "r") as f:
-            self.usuario = yaml.safe_load(f)
+        self._openai_client = openai_client
+        self._http = http_session or requests.Session()
+        self.usuario, self.using_example_config = self._load_user_config()
 
-        openai.api_type = "azure"
-        openai.api_base = self.openai_endpoint
-        openai.api_key = self.openai_key
-        openai.api_version = self.api_version
+    def _load_user_config(self) -> tuple[dict[str, Any], bool]:
+        private_config = self.base_dir / "config_usuario.yaml"
+        example_config = self.base_dir / "config_usuario.example.yaml"
+        config_path = private_config if private_config.exists() else example_config
 
-    # Documentos y biblioteca
-    def list_documents(self):
-        docs = []
-        if not os.path.exists(self.docs_folder):
+        if not config_path.exists():
+            raise FileNotFoundError(
+                "Missing config_usuario.yaml and config_usuario.example.yaml."
+            )
+
+        with config_path.open(encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+
+        if "nombre" not in data:
+            raise ValueError("User configuration must define 'nombre'.")
+
+        return data, config_path == example_config
+
+    def _client(self) -> AzureOpenAI:
+        if self._openai_client is not None:
+            return self._openai_client
+
+        missing = [
+            name
+            for name, value in {
+                "AZURE_OPENAI_ENDPOINT": self.openai_endpoint,
+                "AZURE_OPENAI_API_KEY": self.openai_key,
+                "AZURE_OPENAI_DEPLOYMENT_NAME": self.deployment,
+                "AZURE_OPENAI_VERSION": self.api_version,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                "Azure OpenAI is not configured. Missing: " + ", ".join(missing)
+            )
+
+        self._openai_client = AzureOpenAI(
+            api_key=self.openai_key,
+            azure_endpoint=self.openai_endpoint,
+            api_version=self.api_version,
+        )
+        return self._openai_client
+
+    # Documents and optional bibliography context
+    def list_documents(self) -> list[dict[str, str]]:
+        docs: list[dict[str, str]] = []
+        if not self.docs_folder.exists():
             return docs
-        for fname in os.listdir(self.docs_folder):
-            path = os.path.join(self.docs_folder, fname)
-            if fname.lower().endswith(('.png', '.jpg', '.jpeg')):
-                docs.append({"name": fname, "path": path, "type": "image"})
-            elif fname.lower().endswith('.txt'):
-                with open(path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                docs.append({"name": fname, "content": content, "type": "text"})
-            elif fname.lower().endswith('.pdf'):
-                docs.append({"name": fname, "path": path, "type": "pdf"})
+
+        for path in sorted(self.docs_folder.iterdir()):
+            suffix = path.suffix.lower()
+            if suffix in {".png", ".jpg", ".jpeg"}:
+                docs.append({"name": path.name, "path": str(path), "type": "image"})
+            elif suffix == ".txt":
+                docs.append(
+                    {
+                        "name": path.name,
+                        "content": path.read_text(encoding="utf-8"),
+                        "type": "text",
+                    }
+                )
+            elif suffix == ".pdf":
+                docs.append({"name": path.name, "path": str(path), "type": "pdf"})
         return docs
 
-    def analizar_pdf(self, file_path):
-        url = f"{self.docintel_endpoint}/formrecognizer/documentModels/prebuilt-layout/analyze?api-version=2023-07-31"
+    def analizar_pdf(
+        self,
+        file_path: str | Path,
+        *,
+        poll_interval_seconds: float = 1.0,
+        max_polls: int = 60,
+    ) -> str:
+        if not self.docintel_endpoint or not self.docintel_key:
+            raise RuntimeError("Azure Document Intelligence is not configured.")
+
+        analyze_url = (
+            f"{self.docintel_endpoint.rstrip('/')}/documentintelligence/"
+            "documentModels/prebuilt-layout:analyze"
+        )
         headers = {
             "Ocp-Apim-Subscription-Key": self.docintel_key,
-            "Content-Type": "application/pdf"
+            "Content-Type": "application/pdf",
         }
-        with open(file_path, "rb") as f:
-            data = f.read()
-        response = requests.post(url, headers=headers, data=data)
-        result = response.json()
-        texto = "\n".join([line['content'] for page in result.get('pages', []) for line in page.get('lines', [])])
-        return texto
+        params = {"api-version": self.docintel_api_version}
 
-    def get_bibliografia_resumida(self):
-        resumenes = []
+        with Path(file_path).open("rb") as handle:
+            response = self._http.post(
+                analyze_url,
+                headers=headers,
+                params=params,
+                data=handle,
+                timeout=30,
+            )
+        response.raise_for_status()
+
+        operation_url = response.headers.get("Operation-Location")
+        if not operation_url:
+            raise RuntimeError("Document Intelligence response has no Operation-Location.")
+
+        for _ in range(max_polls):
+            result_response = self._http.get(
+                operation_url,
+                headers={"Ocp-Apim-Subscription-Key": self.docintel_key},
+                timeout=30,
+            )
+            result_response.raise_for_status()
+            payload = result_response.json()
+            status = str(payload.get("status", "")).lower()
+
+            if status == "succeeded":
+                result = payload.get("analyzeResult", {})
+                return "\n".join(
+                    line.get("content", "")
+                    for page in result.get("pages", [])
+                    for line in page.get("lines", [])
+                    if line.get("content")
+                )
+            if status in {"failed", "canceled"}:
+                raise RuntimeError(f"Document analysis ended with status: {status}")
+
+            time.sleep(poll_interval_seconds)
+
+        raise TimeoutError("Document analysis did not finish within the polling limit.")
+
+    def get_bibliografia_resumida(self) -> str:
+        summaries: list[str] = []
         for doc in self.list_documents():
-            if doc['type'] == "text":
-                resumenes.append(f"{doc['name']}: {doc['content'][:500]}{'...' if len(doc['content'])>500 else ''}")
-            elif doc['type'] == "pdf":
-                texto = self.analizar_pdf(doc['path'])
-                resumenes.append(f"{doc['name']}: {texto[:500]}{'...' if len(texto)>500 else ''}")
-        return "\n".join(resumenes)
+            if doc["type"] == "text":
+                content = doc["content"]
+            elif doc["type"] == "pdf":
+                content = self.analizar_pdf(doc["path"])
+            else:
+                continue
+            preview = content[:500]
+            suffix = "..." if len(content) > 500 else ""
+            summaries.append(f"{doc['name']}: {preview}{suffix}")
+        return "\n".join(summaries)
 
-    # Evolución personal - mediciones
-    def get_measurements(self):
-        if not os.path.exists(self.measurements_file):
+    # Measurements
+    def get_measurements(self) -> pd.DataFrame | None:
+        if not self.measurements_file.exists():
             return None
-        df = pd.read_csv(self.measurements_file)
-        # Solo columnas relevantes (sin peso)
-        columnas = ["fecha", "cintura", "cadera", "muslo"]
-        return df[columnas] if set(columnas).issubset(df.columns) else df
+        return pd.read_csv(self.measurements_file)
 
-    def register_measurements(self, fecha, cintura, cadera, muslo):
-        entry = {
+    def save_measurements(self, measurements: pd.DataFrame) -> None:
+        measurements.to_csv(self.measurements_file, index=False)
+
+    def register_measurements(
+        self,
+        fecha: dt.date,
+        cintura: float,
+        cadera: float,
+        muslo: float,
+        peso: float | None = None,
+        altura: float | None = None,
+    ) -> None:
+        entry: dict[str, Any] = {
             "fecha": fecha.strftime("%Y-%m-%d"),
             "cintura": cintura,
             "cadera": cadera,
             "muslo": muslo,
         }
-        if os.path.exists(self.measurements_file):
-            df = pd.read_csv(self.measurements_file)
-            df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+        if peso is not None:
+            entry["peso"] = peso
+        if altura is not None:
+            entry["altura"] = altura
+
+        existing = self.get_measurements()
+        if existing is None:
+            updated = pd.DataFrame([entry])
         else:
-            df = pd.DataFrame([entry])
-        df.to_csv(self.measurements_file, index=False)
+            updated = pd.concat([existing, pd.DataFrame([entry])], ignore_index=True)
+
+        self.save_measurements(updated)
         self.registrar_cambio(
             "mediciones",
             f"Nuevo registro de medición: {entry['fecha']}",
             "",
-            str(entry)
+            str(entry),
         )
 
-    def get_measurements_resumen(self):
+    def get_measurements_resumen(self) -> str:
         df = self.get_measurements()
         if df is None or df.empty:
             return "Sin registros de mediciones."
-        ultimos = df.tail(5)
-        resumen = []
-        for _, row in ultimos.iterrows():
-            resumen.append(
-                f"{row['fecha']}: Cintura: {row['cintura']}cm, Cadera: {row['cadera']}cm, Muslo: {row['muslo']}cm"
-            )
-        return "\n".join(resumen)
 
-    # Plan semanal: comidas y rutinas
-    def get_plan_semanal(self):
-        if not os.path.exists(self.plan_file):
+        summary: list[str] = []
+        for _, row in df.tail(5).iterrows():
+            pieces = [
+                f"Cintura: {row.get('cintura', '—')} cm",
+                f"Cadera: {row.get('cadera', '—')} cm",
+                f"Muslo: {row.get('muslo', '—')} cm",
+            ]
+            if pd.notna(row.get("peso")):
+                pieces.append(f"Peso: {row['peso']} kg")
+            summary.append(f"{row['fecha']}: " + ", ".join(pieces))
+        return "\n".join(summary)
+
+    # Weekly plan
+    def get_plan_semanal(self) -> pd.DataFrame | None:
+        if not self.plan_file.exists():
             return None
         return pd.read_csv(self.plan_file)
 
-    def save_plan_semanal(self, plan_df):
-        prev_plan = self.get_plan_semanal()
-        # Solo guardar los cambios REALES
-        if prev_plan is not None:
-            for i in range(len(plan_df)):
-                for col in ["Desayuno", "Comida", "Cena", "Ejercicio"]:
-                    valor_antes = prev_plan.at[i, col] if col in prev_plan.columns else ""
-                    valor_despues = plan_df.at[i, col]
-                    if (
-                        pd.notna(valor_despues) and valor_despues != valor_antes
-                        and not (pd.isna(valor_antes) and valor_despues in [None, "", "nan", "None"])
-                        and not (pd.isna(valor_despues) and valor_antes in [None, "", "nan", "None"])
-                    ):
+    def save_plan_semanal(self, plan_df: pd.DataFrame) -> None:
+        previous = self.get_plan_semanal()
+        tracked_columns = ["Desayuno", "Comida", "Cena", "Ejercicio"]
+
+        if previous is not None and "Día" in plan_df.columns and "Día" in previous.columns:
+            previous_by_day = previous.set_index("Día")
+            for _, row in plan_df.iterrows():
+                day = row["Día"]
+                if day not in previous_by_day.index:
+                    continue
+                for column in tracked_columns:
+                    if column not in plan_df.columns:
+                        continue
+                    before = previous_by_day.at[day, column] if column in previous.columns else ""
+                    after = row[column]
+                    before_normalized = "" if pd.isna(before) else str(before)
+                    after_normalized = "" if pd.isna(after) else str(after)
+                    if before_normalized != after_normalized:
                         self.registrar_cambio(
                             "plan_semanal",
-                            f"Cambio en {col} de {plan_df.at[i, 'Día']}",
-                            valor_antes,
-                            valor_despues
+                            f"Cambio en {column} de {day}",
+                            before_normalized,
+                            after_normalized,
                         )
+
         plan_df.to_csv(self.plan_file, index=False)
 
-    def registrar_cambio(self, tipo, descripcion, valor_antes, valor_despues):
+    def registrar_cambio(
+        self,
+        tipo: str,
+        descripcion: str,
+        valor_antes: Any,
+        valor_despues: Any,
+    ) -> None:
         entry = {
-            "fecha": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "fecha": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "tipo": tipo,
             "descripcion": descripcion,
             "valor_antes": valor_antes,
-            "valor_despues": valor_despues
+            "valor_despues": valor_despues,
         }
-        if os.path.exists(self.hist_file):
-            df = pd.read_csv(self.hist_file)
-            df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+        if self.hist_file.exists():
+            history = pd.read_csv(self.hist_file)
+            history = pd.concat([history, pd.DataFrame([entry])], ignore_index=True)
         else:
-            df = pd.DataFrame([entry])
-        df.to_csv(self.hist_file, index=False)
+            history = pd.DataFrame([entry])
+        history.to_csv(self.hist_file, index=False)
 
-    def get_historial_cambios(self):
-        if not os.path.exists(self.hist_file):
+    def get_historial_cambios(self) -> pd.DataFrame:
+        if not self.hist_file.exists():
             return pd.DataFrame()
         return pd.read_csv(self.hist_file)
 
-    def propuestas_automaticas(self):
+    def propuestas_automaticas(self) -> list[str]:
         plan = self.get_plan_semanal()
-        mensajes = []
-        # Propuesta: cambio de comida si se repite demasiado
+        messages: list[str] = []
+
         if plan is not None and not plan.empty:
-            comidas = plan["Comida"].value_counts()
-            if comidas.max() > 2 and comidas.idxmax() != "":
-                comida_repetida = comidas.idxmax()
-                mensajes.append(f"La comida '{comida_repetida}' se repite {comidas.max()} veces esta semana, ¿quieres cambiarla en tu plan?")
-            if not any(plan["Ejercicio"].astype(str).str.lower().str.contains("casa", na=False)):
-                mensajes.append("No tienes ejercicio en casa esta semana, ¿quieres añadir una rutina en casa?")
-        # Propuesta: si han pasado X días desde la última medición
-        df = self.get_measurements()
-        if df is not None and not df.empty and "fecha" in df.columns:
-            fechas = pd.to_datetime(df["fecha"])
-            ult_fecha = fechas.max().date()
-            hoy = datetime.datetime.now().date()
-            if (hoy - ult_fecha).days > 7:
-                mensajes.append("No has registrado mediciones en más de una semana, ¿quieres hacerlo ahora?")
-        return mensajes
+            if "Comida" in plan.columns:
+                meals = plan["Comida"].fillna("").value_counts()
+                if not meals.empty and meals.max() > 2 and meals.idxmax():
+                    messages.append(
+                        f"La comida '{meals.idxmax()}' se repite {meals.max()} veces "
+                        "esta semana. ¿Quieres variarla?"
+                    )
+            if "Ejercicio" in plan.columns and not any(
+                plan["Ejercicio"].astype(str).str.lower().str.contains("casa", na=False)
+            ):
+                messages.append(
+                    "No tienes ejercicio en casa esta semana. "
+                    "¿Quieres añadir una rutina en casa?"
+                )
 
-    def construir_instruccion_modificacion(self, user_input):
-        dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        tipos = ["desayuno", "comida", "cena", "ejercicio"]
-        dia = None
-        tipo = None
-        for d in dias:
-            if d in user_input.lower():
-                dia = d.capitalize()
-        for t in tipos:
-            if t in user_input.lower():
-                tipo = t.capitalize()
-        return dia, tipo
+        measurements = self.get_measurements()
+        if measurements is not None and not measurements.empty and "fecha" in measurements:
+            latest = pd.to_datetime(measurements["fecha"]).max().date()
+            if (dt.date.today() - latest).days > 7:
+                messages.append(
+                    "No has registrado mediciones en más de una semana. "
+                    "¿Quieres hacerlo ahora?"
+                )
+        return messages
 
-    def build_prompt(self, user_input, chat_history):
-        u = self.usuario
-        history = "\n".join([f"{m['role']}: {m['content']}" for m in chat_history])
-        momento = datetime.datetime.now()
-        hora_actual = momento.strftime('%H:%M')
-        dia_actual = momento.strftime('%A, %d de %B de %Y')
-        measurements_resumen = self.get_measurements_resumen()
-        bibliografia = self.get_bibliografia_resumida()
-        plan = self.get_plan_semanal()
-        plan_text = ""
-        if plan is not None and not plan.empty:
-            plan_text = "\n".join([
-                f"{row['Día']}: Desayuno: {row['Desayuno']}, Comida: {row['Comida']}, Cena: {row['Cena']}, Ejercicio: {row['Ejercicio']}"
-                for _, row in plan.iterrows()
-            ])
-        else:
-            plan_text = "Sin plan semanal registrado."
-        preferencias = ", ".join(u.get("preferencias", []))
-        rutina = "\n".join([f"- {r}" for r in u.get("rutina", [])])
-        comentarios = "\n".join([f"- {c}" for c in u.get("comentarios", [])])
-        horario_trabajo = u.get("horario_trabajo", "")
-        materiales = ", ".join(u.get("materiales_casa", []))
-        objetivos = ", ".join(u.get("objetivos", []))
-        refrigerador = "\n".join([f"- {item}" for item in u.get("refrigerador", [])])
+    def construir_instruccion_modificacion(
+        self,
+        user_input: str,
+    ) -> tuple[str | None, str | None]:
+        days = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        types = ["desayuno", "comida", "cena", "ejercicio"]
+        lowered = user_input.lower()
+        day = next((value.capitalize() for value in days if value in lowered), None)
+        plan_type = next((value.capitalize() for value in types if value in lowered), None)
+        return day, plan_type
 
-        prompt = (
-            f"Usuario: {u['nombre']}, {u['edad']} años, {u['ciudad']}, {u['pais']}.\n"
-            f"Estatura: {u['estatura']}m. Profesión: {u['profesion']}.\n"
-            f"Preferencias: {preferencias}.\n"
-            f"Rutina y actividades semanales:\n{rutina}\n"
-            f"Horario de trabajo: {horario_trabajo}\n"
-            f"Comentarios personales:\n{comentarios}\n"
-            f"Material disponible en casa: {materiales}\n"
-            f"Objetivos: {objetivos}\n"
-            f"Alimentos disponibles en el refrigerador:\n{refrigerador}\n"
-            f"Fecha y hora actual: {hora_actual} del {dia_actual}.\n"
-            f"Últimos registros de mediciones:\n{measurements_resumen}\n"
-            f"Plan semanal actual:\n{plan_text}\n"
-            f"Bibliografía profesional resumida:\n{bibliografia}\n"
-            f"Historial de chat:\n{history}\n"
-            f"Consulta: {user_input}\n"
-            "Analiza todos los datos, preferencias y lo que hay en el refrigerador/materiales para proponer rutinas o menús adaptados a la situación real del usuario y cada día en dependencia de la consulta que te haga. "
-            "Si no tienes suficientes alimentos o materiales para hacer una rutina o menú adecuado, responde también con una lista de la compra breve y concreta y explica por qué. "
-            "Si puedes, da la rutina o menú personalizado. Sé claro, breve, estructurado y fundamenta tus propuestas."
-            "Si te pide menú semanal, responde SIEMPRE en formato JSON con los días como claves y los campos \"Desayuno\", \"Comida\", \"Cena\" por cada día. Si falta algún ingrediente importante, sugiere primero una lista de la compra y luego el menú. "
-            "En cada sugerencia de comida, tras la propuesta, añade una frase tipo: 'Si te da hambre entre comidas, puedes merendar ....' Usa los alimentos que el usuario tiene en el refrigerador, si es posible, o los más saludables. "
-            "Ejemplo de formato de respuesta:\n"
-            "{\n  \"Lunes\": {\"Desayuno\": \"...\", \"Comida\": \"...\", \"Cena\": \"...\"},\n  ...\n}\n"
-            "Así se podrá guardar el menú automáticamente en el plan semanal."
+    def build_prompt(self, user_input: str, chat_history: list[dict[str, str]]) -> str:
+        user = self.usuario
+        history = "\n".join(
+            f"{message['role']}: {message['content']}" for message in chat_history
         )
-        return prompt
+        now = dt.datetime.now()
+        plan = self.get_plan_semanal()
+        if plan is None or plan.empty:
+            plan_text = "Sin plan semanal registrado."
+        else:
+            plan_text = "\n".join(
+                (
+                    f"{row['Día']}: Desayuno: {row.get('Desayuno', '')}, "
+                    f"Comida: {row.get('Comida', '')}, Cena: {row.get('Cena', '')}, "
+                    f"Ejercicio: {row.get('Ejercicio', '')}"
+                )
+                for _, row in plan.iterrows()
+            )
 
-    def respond(self, user_input, chat_history):
-        saludos = ["hola", "buenos días", "buenas tardes", "buenas noches", "hey", "hello"]
-        dia, tipo = self.construir_instruccion_modificacion(user_input)
-        if user_input.strip().lower() in saludos:
-            return {"respuesta": f"¡Hola {self.usuario['nombre']}! ¿En qué puedo ayudarte hoy?", "propuesta_plan": None}
-        
-        prompt = self.build_prompt(user_input, chat_history)
-        response = openai.chat.completions.create(
+        preferences = ", ".join(map(str, user.get("preferencias", [])))
+        goals = ", ".join(map(str, user.get("objetivos", [])))
+        fridge = "\n".join(f"- {item}" for item in user.get("refrigerador", []))
+        materials = ", ".join(map(str, user.get("materiales_casa", [])))
+
+        bibliography = ""
+        try:
+            bibliography = self.get_bibliografia_resumida()
+        except (RuntimeError, requests.RequestException, TimeoutError):
+            bibliography = "Bibliografía externa no disponible en esta sesión."
+
+        return (
+            f"Usuario: {user.get('nombre', 'Usuario')}.\n"
+            f"Preferencias: {preferences or 'No registradas'}.\n"
+            f"Objetivos: {goals or 'No registrados'}.\n"
+            f"Material disponible: {materials or 'No registrado'}.\n"
+            f"Alimentos disponibles:\n{fridge or '- No registrados'}\n"
+            f"Fecha y hora actual: {now.isoformat(timespec='minutes')}.\n"
+            f"Últimos registros:\n{self.get_measurements_resumen()}\n"
+            f"Plan semanal actual:\n{plan_text}\n"
+            f"Bibliografía resumida:\n{bibliography or 'No disponible'}\n"
+            f"Historial de chat:\n{history or 'Sin historial'}\n"
+            f"Consulta: {user_input}\n\n"
+            "Responde de forma práctica y estructurada. No diagnostiques enfermedades, "
+            "no sustituyas a profesionales sanitarios y evita recomendaciones extremas. "
+            "Para menús semanales, devuelve JSON con los días como claves y los campos "
+            "Desayuno, Comida y Cena."
+        )
+
+    def respond(
+        self,
+        user_input: str,
+        chat_history: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        greetings = {
+            "hola",
+            "buenos días",
+            "buenas tardes",
+            "buenas noches",
+            "hey",
+            "hello",
+        }
+        if user_input.strip().lower() in greetings:
+            return {
+                "respuesta": (
+                    f"¡Hola {self.usuario['nombre']}! ¿En qué puedo ayudarte hoy?"
+                ),
+                "propuesta_plan": None,
+            }
+
+        response = self._client().chat.completions.create(
             model=self.deployment,
             messages=[
-                {"role": "system", "content": f"Eres el entrenador personal, dietista y consejero de {self.usuario['nombre']}. Conversa de manera empática y humana, adaptándote al ritmo del usuario. Analiza siempre el contexto real, preferencias, materiales, alimentos y objetivos antes de proponer rutinas o menús. Si no hay suficientes alimentos/materiales, sugiere primero una lista de la compra."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": (
+                        "Eres un asistente de planificación de bienestar, alimentación "
+                        "cotidiana y actividad física. Personaliza usando solo el contexto "
+                        "proporcionado. No hagas diagnósticos médicos ni presentes tus "
+                        "respuestas como consejo sanitario profesional."
+                    ),
+                },
+                {"role": "user", "content": self.build_prompt(user_input, chat_history)},
             ],
-            temperature=0.7,
-            max_tokens=1500
+            temperature=0.5,
+            max_tokens=1500,
         )
-        respuesta = response.choices[0].message.content
-
-        return {"respuesta": respuesta, "propuesta_plan": None}
+        return {
+            "respuesta": response.choices[0].message.content or "",
+            "propuesta_plan": None,
+        }
