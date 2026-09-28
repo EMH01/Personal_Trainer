@@ -190,7 +190,16 @@ class VirtualAssistant:
     def get_measurements(self) -> pd.DataFrame | None:
         if not self.measurements_file.exists():
             return None
-        return pd.read_csv(self.measurements_file)
+
+        measurements = pd.read_csv(self.measurements_file)
+        numeric_columns = ["cintura", "cadera", "muslo", "peso", "altura"]
+        for column in numeric_columns:
+            if column in measurements.columns:
+                measurements[column] = pd.to_numeric(
+                    measurements[column],
+                    errors="coerce",
+                ).astype(float)
+        return measurements
 
     def save_measurements(self, measurements: pd.DataFrame) -> None:
         measurements.to_csv(self.measurements_file, index=False)
